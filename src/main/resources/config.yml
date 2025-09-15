@@ -156,6 +156,8 @@ messages:
   cancelled-chat: "&#FF6B6B❌ Teleport cancelled - you chatted!"
   cancelled-timeout: "&#FF6B6B❌ Teleport cancelled - location search timed out!"
   cancelled-shutdown: "&#FF6B6B❌ Teleport cancelled - server restarting!"
+  # Fixed hardcoded no safe location message!
+  cancelled-no-safe-locations: "&#FF6B6B❌ Teleport cancelled - no safe locations found!"
 
   cooldown-active: "&#FF6B6B⏰ Cooldown active! Wait &#FFC857{time}&#FF6B6B."
   cooldown-queue-join: "&#FF6B6B⏰ Queue join cooldown! Wait &#FFC857{time}&#FF6B6B."
@@ -214,4 +216,5 @@ particles:
 
 advanced:
   log-queue-actions: false
+
   log-teleports: true
