@@ -13,10 +13,13 @@ import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.ChatColor;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * TeleportManager
@@ -25,6 +28,10 @@ import java.util.concurrent.ThreadLocalRandom;
  * - Keeps players marked in activeSessions until teleport fully completes
  * - Safer async location search with timeout and sensible fallbacks
  * - Additional debug/logging to help diagnose "no safe teleport location" situations
+ *
+ * NOTE: cancelSession now explicitly reads configurable messages using:
+ *   messages.cancelled-<reason>
+ * and will translate hex-style color tokens like "&#RRGGBB".
  */
 public class TeleportManager {
     private final AdvancedRTPQueue plugin;
@@ -666,6 +673,13 @@ public class TeleportManager {
         }.runTaskAsynchronously(plugin);
     }
 
+    /**
+     * Reworked cancelSession:
+     * - Reads messages.cancelled-<reason> from config
+     * - Applies {world} placeholder
+     * - Translates hex color tokens like "&#00B5A3"
+     * - Falls back to MessageUtil.sendMessage(player, "teleport-failed") if no config entry found
+     */
     public void cancelSession(TeleportSession session, String reason) {
         if (session == null) return;
 
@@ -679,9 +693,26 @@ public class TeleportManager {
             activeSessions.remove(playerUUID);
         }
 
+        // Build config path and load raw message
+        String configPath = "messages.cancelled-" + reason;
+        String rawMessage = plugin.getConfigManager().getString(configPath, null);
+
+        // Prepare placeholders (you can add more if needed)
+        Map<String, String> placeholders = Map.of(
+                "world", plugin.getWorldManager().getDisplayName(session.getWorldKey())
+        );
+
         for (Player player : players) {
-            // send specific cancel message if available or fallback to generic
-            MessageUtil.sendMessage(player, "cancelled-" + reason);
+            if (rawMessage != null && !rawMessage.isEmpty()) {
+                // apply placeholders and color translation, then send
+                String formatted = applyPlaceholders(rawMessage, placeholders);
+                formatted = translateHexColors(formatted);
+                player.sendMessage(formatted);
+            } else {
+                // fallback to existing message keys handled by MessageUtil
+                MessageUtil.sendMessage(player, "teleport-failed");
+            }
+
             MessageUtil.playSound(player, "teleport-cancelled");
         }
     }
@@ -770,5 +801,54 @@ public class TeleportManager {
         public BukkitTask getCountdownTask() { return countdownTask; }
         public void setCountdownTask(BukkitTask countdownTask) { this.countdownTask = countdownTask; }
         public void removePlayer(UUID playerUUID) { playerUUIDs.remove(playerUUID); }
+    }
+
+    /* -------------------------
+       Helper methods
+       ------------------------- */
+
+    private String applyPlaceholders(String message, Map<String, String> placeholders) {
+        if (message == null || placeholders == null || placeholders.isEmpty()) return message;
+        for (Map.Entry<String, String> e : placeholders.entrySet()) {
+            String value = e.getValue() == null ? "" : e.getValue();
+            message = message.replace("{" + e.getKey() + "}", value);
+        }
+        return message;
+    }
+
+    /**
+     * Translates hex color tokens of the form "&#RRGGBB" into the proper ChatColor sequences
+     * and then runs ChatColor.translateAlternateColorCodes('&', ...).
+     *
+     * Uses net.md_5.bungee.api.ChatColor.of(...) (requires Minecraft 1.16+ / modern servers).
+     */
+    private String translateHexColors(String message) {
+        if (message == null) return null;
+
+        Pattern pattern = Pattern.compile("&#([A-Fa-f0-9]{6})");
+        Matcher matcher = pattern.matcher(message);
+        StringBuffer buffer = new StringBuffer();
+
+        while (matcher.find()) {
+            String hex = matcher.group(1);
+            // convert to bungee color code string (e.g. §x§R§R§G§G§B§B) by using Bungee ChatColor.of
+            String replacement;
+            try {
+                replacement = net.md_5.bungee.api.ChatColor.of("#" + hex).toString();
+            } catch (NoClassDefFoundError | Exception e) {
+                // If Bungee ChatColor is not available on the server build, fall back to removing hex token
+                replacement = "";
+                if (plugin.getConfigManager().getBoolean("plugin.debug")) {
+                    plugin.getLogger().warning("Hex color translation failed for #" + hex + ": " + e.getMessage());
+                }
+            }
+            // Escape $ signs for appendix safety
+            replacement = Matcher.quoteReplacement(replacement);
+            matcher.appendReplacement(buffer, replacement);
+        }
+        matcher.appendTail(buffer);
+
+        // translate legacy '&' color codes afterwards
+        return ChatColor.translateAlternateColorCodes('&', buffer.toString());
     }
 }
